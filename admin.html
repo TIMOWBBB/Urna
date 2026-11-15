@@ -208,7 +208,7 @@ function desenharCand() {
   });
 }
 async function salvarCand() {
-  if (cfg.status !== 'draft') return toast('Candidaturas só podem ser editadas com a votação em preparação.');
+  if (!['draft', 'paused'].includes(cfg.status)) return toast('Candidaturas só podem ser editadas com a votação em preparação ou suspensa.');
   for (const r of rows) {
     const d = { number: String(r.number || '').trim(), name: (r.name || '').trim(), party: (r.party || '').trim(), state: (r.state || '').trim(),
       photo_url: (r.photo_url || '').trim() || null, active: r.active !== false, runoff_eligible: !!r.runoff_eligible };
