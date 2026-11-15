@@ -199,7 +199,7 @@ async function carregarCand() {
   rows = data; desenharCand();
 }
 function desenharCand() {
-  const t = $('#t-cand'), bloq = cfg.status !== 'draft'; t.replaceChildren();
+  const t = $('#t-cand'), bloq = !['draft', 'paused'].includes(cfg.status); t.replaceChildren();
   t.append(h('tr', {}, ...['Número', 'Nome', 'Partido', 'Estado', 'URL da foto', 'Ativo', '2º turno'].map(x => h('th', {}, x))));
   rows.forEach((r, i) => {
     const campo = (k, w) => { const el = h('input', { style: 'width:' + w }); el.value = r[k] || ''; el.disabled = bloq; el.oninput = () => r[k] = el.value; return h('td', {}, el); };
