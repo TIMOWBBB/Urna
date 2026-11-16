@@ -105,6 +105,7 @@ ALTER TABLE public.candidates
 
 CREATE INDEX ballots_office_round_idx ON public.ballots (office_id, round);
 CREATE INDEX participation_office_round_idx ON public.participation (office_id, round);
+GRANT SELECT (office_id) ON public.candidates TO anon, authenticated;
 
 -- Public ballot configuration. Only active offices are returned.
 CREATE OR REPLACE FUNCTION public.public_election_offices()
@@ -885,6 +886,7 @@ REVOKE ALL ON FUNCTION public.admin_turnout() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.admin_turnout() TO authenticated;
 REVOKE ALL ON FUNCTION public.admin_tally() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.admin_tally() TO authenticated;
+REVOKE ALL ON FUNCTION public.public_election_offices() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.public_election_offices() TO anon, authenticated;
 
 NOTIFY pgrst, 'reload schema';
