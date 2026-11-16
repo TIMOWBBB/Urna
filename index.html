@@ -116,8 +116,12 @@ const ERR = {
 const msg = e => ERR[e && e.message] || 'Erro inesperado. Tente novamente.';
 
 let cands = [], digits = '', choice = null, len = 2, busy = false;
+let statusAtual = null;
+let telaAtual = 'carregando';
+let verificandoStatus = false;
 
 function stage(id) {
+  telaAtual = id;
   document.querySelectorAll('.stage').forEach(s => s.hidden = s.id !== id);
   $('.keypad').classList.toggle('off', id !== 'urna');
 }
@@ -127,15 +131,76 @@ function fim(titulo, texto = '') {
   $('#fim-titulo').textContent = titulo; $('#fim-texto').textContent = texto; stage('fim');
 }
 
+function mensagemStatus(status) {
+  if (status === 'paused') return 'VOTAÇÃO SUSPENSA. Aguarde a administração reabrir a votação.';
+  if (status === 'closed') return 'VOTAÇÃO ENCERRADA. Não é mais possível registrar votos.';
+  if (status === 'draft') return 'A VOTAÇÃO AINDA NÃO FOI INICIADA. Aguarde a liberação da administração.';
+  return 'Não foi possível confirmar o estado da votação. Tente novamente em instantes.';
+}
+
+// Consulta o estado oficial no banco. Se não conseguir confirmar, bloqueia a urna por segurança.
+async function verificarStatus() {
+  if (verificandoStatus) return;
+  verificandoStatus = true;
+
+  try {
+    const { data, error } = await sb
+      .from('election_config')
+      .select('status')
+      .eq('id', 1)
+      .single();
+
+    if (error || !data) throw error || new Error('status_indisponivel');
+
+    const anterior = statusAtual;
+    statusAtual = data.status;
+
+    if (statusAtual !== 'open') {
+      digits = '';
+      choice = null;
+      $('#ok').disabled = true;
+      $('#digitos').replaceChildren();
+      $('#info').replaceChildren();
+      geral(mensagemStatus(statusAtual));
+    } else if (anterior !== 'open') {
+      // Quando a votação for aberta/reaberta, volta à tela inicial.
+      stage('inicio');
+    }
+  } catch (e) {
+    statusAtual = null;
+    digits = '';
+    choice = null;
+    $('#ok').disabled = true;
+    geral(mensagemStatus(null));
+  } finally {
+    verificandoStatus = false;
+  }
+}
+
 async function boot() {
   try {
     const { data: { session } } = await sb.auth.getSession();
-    if (!session) { const { error } = await sb.auth.signInAnonymously(); if (error) throw error; }
-    stage('inicio');
-  } catch (e) { geral('Não foi possível conectar à urna.'); }
+    if (!session) {
+      const { error } = await sb.auth.signInAnonymously();
+      if (error) throw error;
+    }
+
+    await verificarStatus();
+
+    // Mantém a urna sincronizada com o painel, mesmo se a página ficar aberta.
+    setInterval(verificarStatus, 3000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) verificarStatus();
+    });
+    window.addEventListener('focus', verificarStatus);
+  } catch (e) {
+    geral('Não foi possível conectar à urna. Verifique sua conexão e tente novamente.');
+  }
 }
 
 async function entrar() {
+  await verificarStatus();
+  if (statusAtual !== 'open') return;
   const { data: st, error } = await sb.rpc('my_status');
   if (error) return geral(msg(error));
   if (!st.eligible) return stage('ident');
@@ -153,6 +218,9 @@ async function identificar() {
 }
 
 async function abrirUrna() {
+  await verificarStatus();
+  if (statusAtual !== 'open') return;
+
   const [c, k] = await Promise.all([
     sb.from('election_config').select('status,round').single(),
     sb.from('candidates').select('number,name,party,state,photo_url,runoff_eligible').eq('active', true).order('number')
@@ -192,7 +260,7 @@ function render() {
 }
 
 async function confirmar() {
-  if ($('#ok').disabled || busy) return;
+  if ($('#ok').disabled || busy || statusAtual !== 'open') return;
   busy = true; $('#ok').disabled = true;
   const { error } = await sb.rpc('cast_vote', { p_kind: choice || 'candidate', p_number: choice ? null : digits });
   busy = false;
