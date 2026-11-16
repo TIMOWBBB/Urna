@@ -11,7 +11,16 @@ CREATE TABLE public.election_offices (
 );
 
 INSERT INTO public.election_offices (name, active, sort_order)
-VALUES ('Presidente da Câmara dos Deputados', true, 0)
+VALUES
+  ('Presidente da Câmara dos Deputados', true, 0),
+  ('Presidente da República', false, 10),
+  ('Governador', false, 20),
+  ('Senador', false, 30),
+  ('Deputado Federal', false, 40),
+  ('Deputado Estadual', false, 50),
+  ('Deputado Distrital', false, 60),
+  ('Prefeito', false, 70),
+  ('Vereador', false, 80)
 ON CONFLICT (name) DO NOTHING;
 
 ALTER TABLE public.election_offices ENABLE ROW LEVEL SECURITY;
