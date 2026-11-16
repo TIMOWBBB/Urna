@@ -106,6 +106,46 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 // =================================================================================================
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  async function carregarDataEleicao() {
+  const titulo = document.querySelector('#data-eleicao');
+
+  try {
+    const { data, error } = await sb
+      .from('election_config')
+      .select('election_display_date')
+      .eq('id', 1)
+      .single();
+
+    if (error || !data || !data.election_display_date) return;
+
+    const [ano, mes, dia] =
+      data.election_display_date.split('-').map(Number);
+
+    const dataLocal = new Date(Date.UTC(ano, mes - 1, dia));
+
+    const partes = new Intl.DateTimeFormat('pt-BR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'UTC'
+    }).formatToParts(dataLocal);
+
+    const p = Object.fromEntries(
+      partes.map(x => [x.type, x.value])
+    );
+
+    titulo.textContent =
+      (Number(p.day) === 1 ? '1º' : p.day) +
+      ' DE ' + p.month.toLocaleUpperCase('pt-BR') +
+      ' DE ' + p.year +
+      ' — 57ª LEGISLATURA';
+
+  } catch (e) {
+    // Mantém o título padrão caso o banco esteja indisponível.
+  }
+}
+
+carregarDataEleicao();
 const $ = s => document.querySelector(s);
 const h = (t, a = {}, ...c) => { const e = document.createElement(t); for (const k in a) e.setAttribute(k, a[k]); e.append(...c); return e; };
 const ERR = {
