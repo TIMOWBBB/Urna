@@ -207,6 +207,7 @@ const ERR = {
   eleitor_ja_votou: 'Este eleitor tem participação registrada e não pode ser apagado.',
   cargo_nome_obrigatorio: 'Informe o nome do cargo.',
   cargo_nao_encontrado: 'Cargo não encontrado.',
+  cargo_possui_candidatos: 'Exclua primeiro os candidatos deste cargo; candidatos com votos não podem ser removidos.',
   cargo_ativo_obrigatorio: 'Mantenha ao menos um cargo ativo.',
   cargos_bloqueados: 'Suspenda a votação antes de alterar os cargos.',
   cargos_bloqueados_com_votos: 'Apague os votos antes de alterar os cargos.',
@@ -347,7 +348,7 @@ async function carregarOffices() {
 }
 function desenharOffices() {
   const t = $('#t-offices');
-  t.replaceChildren(h('tr', {}, ...['Cargo', 'Ativo na urna', 'Ordem', 'Turno', ''].map(x => h('th', {}, x))));
+  t.replaceChildren(h('tr', {}, ...['Cargo', 'Ativo na urna', 'Ordem', 'Turno', 'Salvar', 'Remover'].map(x => h('th', {}, x))));
   const bloqueado = !cfg || !['draft', 'paused'].includes(cfg.status);
   offices.forEach((o, i) => {
     const nome = h('input', { style: 'width:190px' }); nome.value = o.name; nome.disabled = bloqueado;
@@ -355,12 +356,15 @@ function desenharOffices() {
     const ordem = h('input', { type: 'number', min: '0', style: 'width:76px' }); ordem.value = o.sort_order; ordem.disabled = bloqueado;
     const salvar = botao('Salvar', 'cinza', () => salvarCargo(i, nome.value, ativo.checked, Number(ordem.value || 0)));
     salvar.disabled = bloqueado;
+    const remover = botao('Remover', 'verm', () => removerCargo(i));
+    remover.disabled = bloqueado;
     t.append(h('tr', {},
       h('td', {}, nome),
       h('td', {}, ativo),
       h('td', {}, ordem),
       h('td', {}, o.round + 'º'),
-      h('td', {}, salvar)
+      h('td', {}, salvar),
+      h('td', {}, remover)
     ));
   });
 }
@@ -376,6 +380,16 @@ async function salvarCargo(i, nome, ativo, ordem) {
     toast('Cargo atualizado.');
     await carregarOffices();
     desenharCand();
+  } catch (e) { console.error(e); }
+}
+async function removerCargo(i) {
+  const o = offices[i];
+  if (!confirm('Remover o cargo "' + o.name + '"? A remoção só é permitida se ele não tiver candidatos e se ainda não houver votos ou participações na eleição.')) return;
+  try {
+    await call('admin_delete_election_office', { p_id: o.office_id });
+    toast('Cargo removido.');
+    await carregarOffices();
+    await carregarCand();
   } catch (e) { console.error(e); }
 }
 async function adicionarCargo() {
