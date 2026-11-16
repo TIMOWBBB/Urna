@@ -127,7 +127,7 @@ td,th{padding:5px;border-bottom:1px solid #e1e3e8;text-align:left}
     <h2>Cadastrar eleitores em lote</h2>
     <p style="font-size:13px;color:#555">Um por linha: <b>Nome;ID do Discord</b>. Só com a votação em preparação ou suspensa. Os códigos aparecem <b>uma única vez</b>: copie ou baixe antes de sair da página.</p>
     <div class="row" style="margin:8px 0">
-      <label>Apagar eleitor sem participação registrada (ID do Discord)<input id="e-delete-id"></label>
+      <label>Eleitor para apagar<select id="e-delete-voter"><option value="">Carregando eleitores...</option></select></label>
       <button id="e-delete" class="verm">Apagar eleitor</button>
     </div>
     <textarea id="e-txt" rows="5" style="width:100%;font:inherit" placeholder="Maria Souza;123456789012345678"></textarea>
@@ -164,7 +164,6 @@ const ERR = {
   valor_invalido: 'Valor inválido.',
   eleitor_nao_encontrado: 'Nenhum eleitor com esse ID do Discord.',
   eleitor_ja_votou: 'Este eleitor tem participação registrada e não pode ser apagado.',
-  discord_id_ambiguo: 'Há mais de um eleitor com esse ID do Discord. Corrija o cadastro antes de apagar.',
   discord_id_obrigatorio: 'Informe o ID do Discord do eleitor.',
   confirmacao_invalida: 'Digite exatamente RESETAR VOTOS.',
   reset_exige_votacao_suspensa_ou_encerrada: 'Suspenda ou encerre a votação antes do reset.',
@@ -190,7 +189,7 @@ async function iniciar() {
   const { data } = await sb.rpc('is_admin');
   if (!data) { await sb.auth.signOut(); return toast('Esta conta não é de administrador.'); }
   $('#login').hidden = true; $('#painel').hidden = false; $('#sair').hidden = false;
-  lastStatus = null; await refresh(); timer = setInterval(refresh, 5000);
+  lastStatus = null; await refresh(); await carregarEleitoresApagaveis(); timer = setInterval(refresh, 5000);
 }
 async function sair() { clearInterval(timer); await sb.auth.signOut(); location.reload(); }
 
@@ -398,21 +397,32 @@ async function gerarCodigos() {
     $('#e-txt').value = '';
     const t = $('#t-cod'); t.replaceChildren(h('tr', {}, ...['Nome', 'Discord', 'Código'].map(x => h('th', {}, x))));
     codigos.forEach(v => t.append(h('tr', {}, h('td', {}, v.nome), h('td', {}, v.discord || ''), h('td', {}, v.codigo))));
-    $('#e-csv').hidden = false; toast('Eleitores cadastrados. Guarde os códigos agora.'); refresh();
+    $('#e-csv').hidden = false; toast('Eleitores cadastrados. Guarde os códigos agora.');
+    await carregarEleitoresApagaveis(); refresh();
   } catch (e) {}
 }
+async function carregarEleitoresApagaveis() {
+  const select = $('#e-delete-voter');
+  const { data, error } = await sb.rpc('admin_voter_delete_options');
+  if (error) return;
+  select.replaceChildren(h('option', { value: '' }, 'Selecione um eleitor...'));
+  data.forEach(v => {
+    const identificacao = v.discord_id ? ' — Discord ' + v.discord_id : '';
+    select.append(h('option', { value: v.voter_id }, v.display_name + identificacao));
+  });
+}
 async function apagarEleitor() {
-  const discord = $('#e-delete-id').value.trim();
-  if (!discord) return toast('Informe o ID do Discord do eleitor.');
+  const voterId = $('#e-delete-voter').value;
+  if (!voterId) return toast('Selecione um eleitor.');
   if (!confirm('Apagar permanentemente este eleitor? A operação só é permitida se ele não tiver participação registrada em nenhum turno.')) return;
   if (prompt('Digite exatamente APAGAR ELEITOR para confirmar:') !== 'APAGAR ELEITOR') return toast('Exclusão cancelada.');
   try {
-    const resultado = await call('admin_delete_voter', {
-      p_discord_id: discord,
+    const resultado = await call('admin_delete_voter_by_id', {
+      p_voter_id: voterId,
       p_confirm: 'APAGAR ELEITOR'
     });
-    $('#e-delete-id').value = '';
     toast('Eleitor apagado: ' + resultado.display_name + '.');
+    await carregarEleitoresApagaveis();
     if ($('#d-vot').open) await listaEleitores();
     if ($('#d-aud').open) await auditoria();
   } catch (e) { console.error(e); }
@@ -424,6 +434,7 @@ function baixarCodigos() {
 }
 $('#e-gerar').onclick = gerarCodigos; $('#e-csv').onclick = baixarCodigos;
 $('#e-delete').onclick = apagarEleitor;
+$('#e-delete-voter').addEventListener('focus', carregarEleitoresApagaveis);
 
 $('#entrar').onclick = entrar; $('#senha').addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); });
 async function liberarIp() {
