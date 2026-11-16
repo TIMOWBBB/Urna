@@ -89,7 +89,7 @@ button{font:inherit;cursor:pointer}
 <body>
 <header>
   <svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="22" fill="#1d3f7a"/><path d="M24 8l4.4 9 9.9 1.4-7.2 7 1.7 9.8L24 30.5l-8.8 4.7 1.7-9.8-7.2-7 9.9-1.4z" fill="#f2c200"/></svg>
-  <h1>ELEIÇÃO PARA PRESIDENTE DA CÂMARA DOS DEPUTADOS</h1>
+  <h1>URNA ELETRÔNICA</h1>
  <h2 id="data-eleicao">
   1º DE FEVEREIRO DE 2027 — 57ª LEGISLATURA
 </h2>
@@ -115,7 +115,7 @@ button{font:inherit;cursor:pointer}
 
     <div class="stage" id="urna" hidden>
       <p>SEU VOTO PARA</p>
-      <p class="big">Presidente da Câmara dos Deputados</p>
+      <p class="big" id="cargo-atual"></p>
       <div class="digitos" id="digitos"></div>
       <div id="info"></div>
       <p class="aviso" id="aviso"></p>
@@ -203,10 +203,47 @@ const ERR = {
 };
 const msg = e => ERR[e && e.message] || 'Erro inesperado. Tente novamente.';
 
-let cands = [], digits = '', choice = null, len = 2, busy = false;
+let cands = [], candidatesByOffice = [], officesAtivas = [], digits = '', choice = null, len = 2, busy = false;
+let officeAtual = null;
 let statusAtual = null;
 let telaAtual = 'carregando';
 let verificandoStatus = false;
+let audioCtx = null;
+
+function somUrna(tipo) {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) return;
+  try {
+    if (!audioCtx) audioCtx = new AudioContextCtor();
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    const sequencias = {
+      tecla: [[660, 0]],
+      branco: [[520, 0]],
+      nulo: [[390, 0]],
+      corrige: [[460, 0]],
+      confirma: [[760, 0]],
+      erro: [[240, 0]],
+      sucesso: [[523, 0], [659, 0.09], [784, 0.18]]
+    };
+    const agora = audioCtx.currentTime;
+    (sequencias[tipo] || sequencias.tecla).forEach(([frequencia, atraso]) => {
+      const oscilador = audioCtx.createOscillator();
+      const volume = audioCtx.createGain();
+      const inicio = agora + atraso;
+      oscilador.type = 'sine';
+      oscilador.frequency.setValueAtTime(frequencia, inicio);
+      volume.gain.setValueAtTime(0.0001, inicio);
+      volume.gain.exponentialRampToValueAtTime(0.12, inicio + 0.008);
+      volume.gain.exponentialRampToValueAtTime(0.0001, inicio + 0.075);
+      oscilador.connect(volume);
+      volume.connect(audioCtx.destination);
+      oscilador.start(inicio);
+      oscilador.stop(inicio + 0.08);
+    });
+  } catch (e) {
+    // O voto continua funcionando mesmo se o navegador bloquear áudio.
+  }
+}
 
 function stage(id) {
   telaAtual = id;
@@ -293,8 +330,9 @@ async function entrar() {
   const { data: st, error } = await sb.rpc('my_status');
   if (error) return geral(msg(error));
   if (!st.eligible) return stage('ident');
-  if (st.voted) return fim('VOCÊ JÁ VOTOU', 'Não é possível votar novamente.');
-  abrirUrna();
+  if (!st.active_offices) return geral('Nenhum cargo está ativo. Aguarde a administração configurar a eleição.');
+  if (st.voted) return fim('VOCÊ JÁ VOTOU', 'Você já concluiu todos os cargos desta eleição.');
+  await abrirUrna(st.pending_offices || []);
 }
 
 async function identificar() {
@@ -306,18 +344,35 @@ async function identificar() {
   entrar();
 }
 
-async function abrirUrna() {
+async function abrirUrna(pendingIds) {
   await verificarStatus();
   if (statusAtual !== 'open') return;
 
-  const [c, k] = await Promise.all([
-    sb.from('election_config').select('status,round').single(),
-    sb.from('candidates').select('number,name,party,state,photo_url,runoff_eligible').eq('active', true).order('number')
+  const [c, o, k] = await Promise.all([
+    sb.from('election_config').select('status').eq('id', 1).single(),
+    sb.rpc('public_election_offices'),
+    sb.from('candidates').select('office_id,number,name,party,state,photo_url,runoff_eligible,active').eq('active', true).order('number')
   ]);
-  if (c.error || k.error) return geral('Erro ao carregar a votação.');
+  if (c.error || o.error || k.error) return geral('Erro ao carregar os cargos da votação.');
   if (c.data.status !== 'open') return geral(ERR.votacao_fechada);
-  cands = k.data.filter(x => c.data.round === 1 || x.runoff_eligible);
-  len = Math.max(2, ...cands.map(x => x.number.length));
+
+  const pendentes = new Set((pendingIds || []).map(String));
+  officesAtivas = o.data || [];
+  candidatesByOffice = k.data || [];
+  const officeIds = new Set(officesAtivas.filter(x => pendentes.has(String(x.id))).map(x => String(x.id)));
+  const primeira = officesAtivas.find(x => officeIds.has(String(x.id)));
+  if (!primeira) return fim('VOTAÇÃO CONCLUÍDA', 'Você já votou em todos os cargos ativos.');
+  abrirCargo(primeira);
+}
+
+function abrirCargo(office) {
+  officeAtual = office;
+  cands = candidatesByOffice.filter(x =>
+    String(x.office_id) === String(office.id) && x.active &&
+    (office.round === 1 || x.runoff_eligible)
+  );
+  len = Math.max(2, ...cands.map(x => String(x.number).length));
+  $('#cargo-atual').textContent = office.name;
   limpar();
   stage('urna');
 }
@@ -349,26 +404,48 @@ function render() {
 }
 
 async function confirmar() {
-  if ($('#ok').disabled || busy || statusAtual !== 'open') return;
+  if ($('#ok').disabled || busy || statusAtual !== 'open' || !officeAtual) return;
   busy = true; $('#ok').disabled = true;
-  const { error } = await sb.rpc('cast_vote', { p_kind: choice || 'candidate', p_number: choice ? null : digits });
+  const { error } = await sb.rpc('cast_vote', {
+    p_office_id: officeAtual.id,
+    p_kind: choice || 'candidate',
+    p_number: choice ? null : digits
+  });
   busy = false;
   if (error) {
-    if (error.message === 'ja_votou') return fim('VOCÊ JÁ VOTOU', 'Não é possível votar novamente.');
+    somUrna('erro');
+    if (error.message === 'ja_votou') {
+      const { data: st } = await sb.rpc('my_status');
+      if (st && st.pending_offices) return abrirUrna(st.pending_offices);
+      return fim('VOCÊ JÁ VOTOU', 'Este cargo já foi registrado.');
+    }
     if (error.message === 'votacao_fechada') return geral(ERR.votacao_fechada);
     $('#aviso').textContent = msg(error); render(); return;
   }
-  fim('FIM — SEU VOTO FOI COMPUTADO');
+
+  const { data: st, error: statusError } = await sb.rpc('my_status');
+  if (statusError) {
+    somUrna('sucesso');
+    return fim('VOTO REGISTRADO', 'Atualize a página para continuar com os cargos restantes.');
+  }
+  if (!st.active_offices) return geral('Nenhum cargo está ativo. Aguarde a administração.');
+  if (st.voted || !st.pending_offices || !st.pending_offices.length) {
+    somUrna('sucesso');
+    return fim('FIM — SEUS VOTOS FORAM COMPUTADOS');
+  }
+
+  somUrna('confirma');
+  abrirUrna(st.pending_offices);
 }
 
 document.addEventListener('click', e => {
   const k = e.target.closest('[data-k]'); if (!k || busy) return;
   const v = k.dataset.k;
-  if (/^\d$/.test(v)) { if (!choice && digits.length < len) digits += v; $('#aviso').textContent = ''; }
-  else if (v === 'B') { choice = 'blank'; digits = ''; }
-  else if (v === 'N') { choice = 'null'; digits = ''; }
-  else if (v === 'C') return limpar();
-  else if (v === 'OK') return confirmar();
+  if (/^\d$/.test(v)) { somUrna('tecla'); if (!choice && digits.length < len) digits += v; $('#aviso').textContent = ''; }
+  else if (v === 'B') { somUrna('branco'); choice = 'blank'; digits = ''; }
+  else if (v === 'N') { somUrna('nulo'); choice = 'null'; digits = ''; }
+  else if (v === 'C') { somUrna('corrige'); return limpar(); }
+  else if (v === 'OK') { somUrna('confirma'); return confirmar(); }
   render();
 });
 $('#btn-iniciar').onclick = entrar;
