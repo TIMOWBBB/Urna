@@ -442,6 +442,40 @@ BEGIN
 END;
 $$;
 
+-- Voter list now reports completion across all active offices and their current rounds.
+CREATE OR REPLACE FUNCTION public.admin_voter_list()
+RETURNS TABLE(display_name text, voted boolean)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $
+BEGIN
+  IF NOT public.is_admin() THEN
+    RAISE EXCEPTION 'sem_permissao';
+  END IF;
+
+  RETURN QUERY
+  SELECT
+    v.display_name,
+    EXISTS (SELECT 1 FROM public.election_offices WHERE active)
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.election_offices AS o
+      WHERE o.active
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.participation AS p
+          WHERE p.voter_id = v.id
+            AND p.office_id = o.id
+            AND p.round = o.round
+        )
+    ) AS voted
+  FROM public.voters AS v
+  WHERE v.eligible
+  ORDER BY v.display_name;
+END;
+$;
+
 CREATE OR REPLACE FUNCTION public.admin_turnout()
 RETURNS jsonb
 LANGUAGE plpgsql
