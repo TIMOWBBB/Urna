@@ -158,7 +158,11 @@ const ERR = {
   cadastro_bloqueado: 'Cadastro de eleitores só com a votação em preparação ou suspensa.',
   nome_obrigatorio: 'Há eleitor sem nome.',
   valor_invalido: 'Valor inválido.',
-  eleitor_nao_encontrado: 'Nenhum eleitor com esse ID do Discord.'
+  eleitor_nao_encontrado: 'Nenhum eleitor com esse ID do Discord.',
+  confirmacao_invalida: 'Digite exatamente RESETAR VOTOS.',
+  reset_exige_votacao_suspensa_ou_encerrada: 'Suspenda ou encerre a votação antes do reset.',
+  data_invalida: 'Informe uma data válida.',
+  configuracao_inexistente: 'Configuração da eleição não encontrada.'
 };
 let cfg = null, tally = null, lastStatus = null, timer = null;
 
@@ -186,70 +190,67 @@ async function sair() { clearInterval(timer); await sb.auth.signOut(); location.
 // ---------- painel ----------
 async function refresh() {
   try {
-    const [c, t] = await Promise.all([sb.from('election_config').select('*').single(), sb.rpc('admin_turnout')]);
-    if (c.error || t.error) throw (c.error || t.error);
-    cfg = c.data; const k = t.data;
-    $('#b-reset-votos').disabled =
-  !['paused', 'closed'].includes(cfg.status);
-    $('#status').textContent = STATUS[cfg.status]; $('#turno').textContent = cfg.round + 'º turno';
-    $('#k-el').textContent = k.eligible; $('#k-vo').textContent = k.voted; $('#k-pe').textContent = k.pending;
-    $('#k-pc').textContent = k.pct + '%'; $('#barra').style.width = k.pct + '%';
-    if (cfg.status !== lastStatus) { lastStatus = cfg.status; desenharAcoes(); preencherConfig(); $('#c-data').value = cfg.election_display_date || '2027-02-01'; await carregarCand(); tally = null; }
-    async function salvarDataCabecalho() {
+    const [c, t] = await Promise.all([
+      sb.from('election_config').select('*').eq('id', 1).single(),
+      sb.rpc('admin_turnout')
+    ]);
+    if (c.error) throw c.error;
+    if (t.error) throw t.error;
+    cfg = c.data;
+    const k = t.data;
+    $('#b-reset-votos').disabled = !['paused', 'closed'].includes(cfg.status);
+    $('#status').textContent = STATUS[cfg.status] || cfg.status;
+    $('#turno').textContent = cfg.round + 'º turno';
+    $('#k-el').textContent = k.eligible;
+    $('#k-vo').textContent = k.voted;
+    $('#k-pe').textContent = k.pending;
+    $('#k-pc').textContent = k.pct + '%';
+    $('#barra').style.width = k.pct + '%';
+    $('#c-data').value = cfg.election_display_date || '2027-02-01';
+    if (cfg.status !== lastStatus) {
+      lastStatus = cfg.status;
+      desenharAcoes();
+      preencherConfig();
+      await carregarCand();
+      tally = null;
+    }
+    if (cfg.status === 'closed') { if (!tally) await apurar(); }
+    else $('#apuracao').hidden = true;
+    if ($('#d-vot').open) await listaEleitores();
+    if ($('#d-aud').open) await auditoria();
+  } catch (e) {
+    console.error('Erro ao atualizar painel:', e);
+    toast('Falha ao atualizar: ' + (e.message || 'erro desconhecido'));
+  }
+}
+
+async function salvarDataCabecalho() {
   const data = $('#c-data').value;
-
   if (!data) return toast('Escolha uma data.');
-
   try {
-    await call('admin_set_election_display_date', {
-      p_date: data
-    });
-
-    toast('Data do cabeçalho atualizada!');
+    await call('admin_set_election_display_date', { p_date: data });
+    cfg.election_display_date = data;
+    toast('Data do cabeçalho atualizada.');
     await refresh();
-  } catch (e) {}
+  } catch (e) { console.error(e); }
 }
 
 async function resetarVotos() {
-  if (!['paused', 'closed'].includes(cfg.status)) {
+  if (!cfg || !['paused', 'closed'].includes(cfg.status))
     return toast('Suspenda ou encerre a votação primeiro.');
-  }
-
-  const autorizado = confirm(
-    'ATENÇÃO! Todos os votos e registros de participação serão apagados. ' +
-    'Os eleitores e candidatos serão mantidos. Deseja continuar?'
-  );
-
-  if (!autorizado) return;
-
-  const confirmacao = prompt(
-    'Digite exatamente RESETAR VOTOS para confirmar.'
-  );
-
-  if (confirmacao !== 'RESETAR VOTOS') {
-    return toast('Reset cancelado.');
-  }
-
+  if (!confirm('ATENÇÃO: serão apagados todos os votos e participações de todos os turnos. Eleitores e candidatos serão mantidos. A eleição ficará suspensa no 1º turno. Continuar?')) return;
+  const confirmacao = prompt('Digite exatamente RESETAR VOTOS para confirmar:');
+  if (confirmacao !== 'RESETAR VOTOS') return toast('Reset cancelado.');
+  const b = $('#b-reset-votos'); b.disabled = true;
   try {
-    const resultado = await call('admin_reset_votes', {
-      p_confirm: confirmacao
-    });
-
-    tally = null;
-    lastStatus = null;
-
-    toast(
-      resultado.ballots_deleted +
-      ' votos apagados. Eleição suspensa no primeiro turno.'
-    );
-
+    const resultado = await call('admin_reset_votes', { p_confirm: confirmacao });
+    tally = null; lastStatus = null;
+    toast('Reset concluído: ' + resultado.ballots_deleted + ' votos e ' + resultado.participation_deleted + ' participações apagados.');
     await refresh();
-  } catch (e) {}
-}
-    if (cfg.status === 'closed') { if (!tally) await apurar(); } else $('#apuracao').hidden = true;
-    if ($('#d-vot').open) await listaEleitores();
-    if ($('#d-aud').open) await auditoria();
-  } catch (e) { /* erro já mostrado ou rede instável; tenta de novo no próximo ciclo */ }
+  } catch (e) {
+    console.error(e);
+    b.disabled = !cfg || !['paused', 'closed'].includes(cfg.status);
+  }
 }
 
 function botao(txt, cls, fn) { const b = h('button', { class: cls }, txt); b.onclick = fn; return b; }
@@ -270,6 +271,7 @@ const iso = v => v ? new Date(v).toISOString() : null;
 function preencherConfig() {
   $('#c-ini').value = loc(cfg.starts_at); $('#c-fim').value = loc(cfg.ends_at); $('#c-q').value = cfg.quorum_pct;
   $('#c-r').value = cfg.majority_rule; $('#c-2t').checked = cfg.runoff_enabled; $('#c-ip').value = cfg.max_votes_per_ip;
+  $('#c-data').value = cfg.election_display_date || '2027-02-01';
 }
 async function salvarConfig() {
   try {
