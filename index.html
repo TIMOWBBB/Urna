@@ -222,6 +222,7 @@ function somUrna(tipo) {
       nulo: [[390, 0]],
       corrige: [[460, 0]],
       confirma: [[760, 0]],
+      proximo: [[600, 0], [800, 0.09]],
       erro: [[240, 0]],
       sucesso: [[523, 0], [659, 0.09], [784, 0.18]]
     };
@@ -434,7 +435,7 @@ async function confirmar() {
     return fim('FIM — SEUS VOTOS FORAM COMPUTADOS');
   }
 
-  somUrna('confirma');
+  somUrna('proximo');
   abrirUrna(st.pending_offices);
 }
 
