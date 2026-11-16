@@ -145,7 +145,6 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   }
 }
 
-carregarDataEleicao();
 const $ = s => document.querySelector(s);
 const h = (t, a = {}, ...c) => { const e = document.createElement(t); for (const k in a) e.setAttribute(k, a[k]); e.append(...c); return e; };
 const ERR = {
@@ -227,6 +226,7 @@ async function boot() {
       if (error) throw error;
     }
 
+    await carregarDataEleicao();
     await verificarStatus();
 
     // Mantém a urna sincronizada com o painel, mesmo se a página ficar aberta.
