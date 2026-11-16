@@ -129,6 +129,12 @@ td,th{padding:5px;border-bottom:1px solid #e1e3e8;text-align:left}
   </section>
 
   <section class="card">
+    <h2>Cargos da eleição</h2>
+    <p style="font-size:13px;color:#555">Ative, renomeie e ordene os cargos que aparecerão na urna. Para preservar os resultados, essa configuração só pode mudar antes de existir participação ou voto.</p>
+    <div class="scroll"><table id="t-offices"></table></div>
+    <div class="row" style="margin-top:8px"><label>Novo cargo<input id="office-new-name" maxlength="100" placeholder="Ex.: Deputado Federal"></label><button id="office-add">Adicionar cargo</button></div>
+  </section>
+  <section class="card">
     <h2>Candidaturas</h2>
     <div class="scroll"><table id="t-cand"></table></div>
     <div class="row" style="margin-top:8px"><button class="cinza" id="c-add">+ Candidato</button><button id="c-save">Salvar candidaturas</button></div>
@@ -199,13 +205,20 @@ const ERR = {
   valor_invalido: 'Valor inválido.',
   eleitor_nao_encontrado: 'Nenhum eleitor com esse ID do Discord.',
   eleitor_ja_votou: 'Este eleitor tem participação registrada e não pode ser apagado.',
+  cargo_nome_obrigatorio: 'Informe o nome do cargo.',
+  cargo_nao_encontrado: 'Cargo não encontrado.',
+  cargo_ativo_obrigatorio: 'Mantenha ao menos um cargo ativo.',
+  cargos_bloqueados: 'Suspenda a votação antes de alterar os cargos.',
+  cargos_bloqueados_com_votos: 'Apague os votos antes de alterar os cargos.',
+  candidato_possui_votos: 'Não é possível mover um candidato que já recebeu votos.',
+  nenhum_cargo_ativo: 'Nenhum cargo está ativo para apuração.',
   discord_id_obrigatorio: 'Informe o ID do Discord do eleitor.',
   confirmacao_invalida: 'Digite exatamente RESETAR VOTOS.',
   reset_exige_votacao_suspensa_ou_encerrada: 'Suspenda ou encerre a votação antes do reset.',
   data_invalida: 'Informe uma data válida.',
   configuracao_inexistente: 'Configuração da eleição não encontrada.'
 };
-let cfg = null, tally = null, lastStatus = null, timer = null;
+let cfg = null, tally = null, lastStatus = null, timer = null, offices = [];
 
 function toast(t) { const e = $('#toast'); e.textContent = t; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => e.style.display = 'none', 4500); }
 async function call(fn, args) {
@@ -252,6 +265,7 @@ async function refresh() {
       lastStatus = cfg.status;
       desenharAcoes();
       preencherConfig();
+      await carregarOffices();
       await carregarCand();
       tally = null;
     }
@@ -325,6 +339,61 @@ async function salvarConfig() {
 
 // ---------- candidaturas ----------
 let rows = [];
+async function carregarOffices() {
+  const { data, error } = await sb.rpc('admin_office_list');
+  if (error) { toast('Erro ao carregar cargos: ' + error.message); return; }
+  offices = data || [];
+  desenharOffices();
+}
+function desenharOffices() {
+  const t = $('#t-offices');
+  t.replaceChildren(h('tr', {}, ...['Cargo', 'Ativo na urna', 'Ordem', 'Turno', ''].map(x => h('th', {}, x))));
+  const bloqueado = !cfg || !['draft', 'paused'].includes(cfg.status);
+  offices.forEach((o, i) => {
+    const nome = h('input', { style: 'width:190px' }); nome.value = o.name; nome.disabled = bloqueado;
+    const ativo = h('input', { type: 'checkbox' }); ativo.checked = o.active; ativo.disabled = bloqueado;
+    const ordem = h('input', { type: 'number', min: '0', style: 'width:76px' }); ordem.value = o.sort_order; ordem.disabled = bloqueado;
+    const salvar = botao('Salvar', 'cinza', () => salvarCargo(i, nome.value, ativo.checked, Number(ordem.value || 0)));
+    salvar.disabled = bloqueado;
+    t.append(h('tr', {},
+      h('td', {}, nome),
+      h('td', {}, ativo),
+      h('td', {}, ordem),
+      h('td', {}, o.round + 'º'),
+      h('td', {}, salvar)
+    ));
+  });
+}
+async function salvarCargo(i, nome, ativo, ordem) {
+  const o = offices[i];
+  try {
+    await call('admin_save_election_office', {
+      p_id: o.office_id,
+      p_name: nome.trim(),
+      p_active: ativo,
+      p_sort_order: ordem
+    });
+    toast('Cargo atualizado.');
+    await carregarOffices();
+    desenharCand();
+  } catch (e) { console.error(e); }
+}
+async function adicionarCargo() {
+  const nome = $('#office-new-name').value.trim();
+  if (!nome) return toast('Informe o nome do cargo.');
+  try {
+    await call('admin_save_election_office', {
+      p_id: null,
+      p_name: nome,
+      p_active: true,
+      p_sort_order: offices.length
+    });
+    $('#office-new-name').value = '';
+    toast('Cargo adicionado.');
+    await carregarOffices();
+    desenharCand();
+  } catch (e) { console.error(e); }
+}
 async function carregarCand() {
   const { data, error } = await sb.from('candidates').select('*').order('number');
   if (error) return toast('Erro ao carregar candidaturas.');
@@ -332,20 +401,25 @@ async function carregarCand() {
 }
 function desenharCand() {
   const t = $('#t-cand'), bloq = !['draft', 'paused'].includes(cfg.status); t.replaceChildren();
-  t.append(h('tr', {}, ...['Número', 'Nome', 'Partido', 'Estado', 'URL da foto', 'Ativo', '2º turno', 'Ações'].map(x => h('th', {}, x))));
+  t.append(h('tr', {}, ...['Cargo', 'Número', 'Nome', 'Partido', 'Estado', 'URL da foto', 'Ativo', '2º turno', 'Ações'].map(x => h('th', {}, x))));
   rows.forEach((r, i) => {
     const campo = (k, w) => { const el = h('input', { style: 'width:' + w }); el.value = r[k] || ''; el.disabled = bloq; el.oninput = () => r[k] = el.value; return h('td', {}, el); };
+    const cargo = h('select', { style: 'min-width:170px' });
+    offices.forEach(o => cargo.append(h('option', { value: o.office_id }, o.name + (o.active ? '' : ' (inativo)'))));
+    cargo.value = r.office_id || '';
+    cargo.disabled = bloq;
+    cargo.onchange = () => r.office_id = cargo.value;
     const chk = k => { const el = h('input', { type: 'checkbox' }); el.checked = !!r[k]; el.disabled = bloq; el.onchange = () => r[k] = el.checked; return h('td', {}, el); };
     const excluir = botao('Excluir', 'verm', () => excluirCand(i));
     excluir.disabled = bloq;
-    t.append(h('tr', {}, campo('number', '60px'), campo('name', '160px'), campo('party', '110px'), campo('state', '120px'), campo('photo_url', '170px'), chk('active'), chk('runoff_eligible'), h('td', {}, excluir)));
+    t.append(h('tr', {}, h('td', {}, cargo), campo('number', '60px'), campo('name', '160px'), campo('party', '110px'), campo('state', '120px'), campo('photo_url', '170px'), chk('active'), chk('runoff_eligible'), h('td', {}, excluir)));
   });
 }
 async function salvarCand() {
   if (!['draft', 'paused'].includes(cfg.status)) return toast('Suspenda a votação para alterar candidaturas.');
   if (!rows.length) return toast('Adicione pelo menos um candidato.');
   for (const r of rows) {
-    const d = { p_id: r.id || null, p_number: String(r.number || '').trim(), p_name: (r.name || '').trim(),
+    const d = { p_id: r.id || null, p_office_id: r.office_id || null, p_number: String(r.number || '').trim(), p_name: (r.name || '').trim(),
       p_party: (r.party || '').trim(), p_state: (r.state || '').trim(),
       p_photo_url: (r.photo_url || '').trim() || null, p_active: r.active !== false,
       p_runoff_eligible: !!r.runoff_eligible };
@@ -390,28 +464,56 @@ async function auditoria() {
 async function apurar() {
   try { tally = await call('admin_tally'); } catch (e) { return; }
   const t = tally, c = $('#ap-corpo'); c.replaceChildren();
-  c.append(h('div', { class: 'grid4' }, ...[['habilitados', t.eligible], ['votos registrados', t.total], ['votos válidos', t.valid], ['brancos', t.blank], ['nulos', t.null]]
-    .map(([l, v]) => h('div', { class: 'kpi' }, h('b', {}, String(v)), l))));
-  const tb = h('table', {}, h('tr', {}, ...['Nº', 'Candidato', 'Partido', 'Votos', '%', ''].map(x => h('th', {}, x))));
-  t.candidates.forEach(x => tb.append(h('tr', {}, h('td', {}, x.number), h('td', {}, x.name), h('td', {}, x.party), h('td', {}, String(x.votes)), h('td', {}, x.pct + '%'),
-    h('td', { style: 'width:35%' }, h('div', { class: 'bar' }, h('i', { style: 'width:' + x.pct + '%' }))))));
-  c.append(h('div', { class: 'scroll' }, tb));
-  const v = t.winner ? 'VENCEDOR: ' + t.winner.name + ' (' + t.winner.party + ')'
-    : !t.quorum_ok ? 'Quórum de presença não atingido.'
-    : t.needs_runoff ? 'Nenhum candidato atingiu a maioria exigida: segundo turno entre os dois mais votados.'
-    : 'Sem vencedor definido (empate ou maioria não atingida).';
-  c.append(h('p', { class: 'venc' }, v));
-  $('#b-2t').hidden = !t.needs_runoff; $('#apuracao').hidden = false;
+  c.append(h('div', { class: 'grid4' }, ...[
+    ['eleitores habilitados', t.eligible],
+    ['votos registrados', t.total],
+    ['votos válidos', t.valid],
+    ['votos em branco', t.blank],
+    ['votos nulos', t.null]
+  ].map(([l, v]) => h('div', { class: 'kpi' }, h('b', {}, String(v)), l))));
+  (t.offices || []).forEach(o => {
+    c.append(h('h3', {}, o.name + ' — ' + o.round + 'º turno'));
+    c.append(h('p', { style: 'font-size:13px;color:#555' },
+      'Participaram: ' + o.participants + ' de ' + o.eligible +
+      ' · votos registrados: ' + o.total + ' · válidos: ' + o.valid));
+    const tb = h('table', {}, h('tr', {}, ...['Nº', 'Candidato', 'Partido', 'Votos', '%', ''].map(x => h('th', {}, x))));
+    o.candidates.forEach(x => tb.append(h('tr', {},
+      h('td', {}, x.number), h('td', {}, x.name), h('td', {}, x.party),
+      h('td', {}, String(x.votes)), h('td', {}, x.pct + '%'),
+      h('td', { style: 'width:35%' }, h('div', { class: 'bar' }, h('i', { style: 'width:' + x.pct + '%' })))
+    )));
+    c.append(h('div', { class: 'scroll' }, tb));
+    const vencedor = o.winner
+      ? 'VENCEDOR: ' + o.winner.name + ' (' + o.winner.party + ')'
+      : !o.quorum_ok ? 'Quórum deste cargo não atingido.'
+      : o.needs_runoff ? 'Segundo turno necessário para este cargo.'
+      : 'Sem vencedor definido para este cargo.';
+    c.append(h('p', { class: 'venc' }, vencedor));
+  });
+  $('#b-2t').hidden = !t.needs_runoff;
+  $('#apuracao').hidden = false;
 }
 const cel = s => { s = String(s); return /^[=+\-@]/.test(s) ? "'" + s : s; };
 function csv() {
   const t = tally; if (!t) return;
-  const L = [['Eleição', 'Presidente da Câmara dos Deputados — RP 2027–2030'], ['Turno', t.round], ['Eleitores habilitados', t.eligible],
-    ['Votos registrados', t.total], ['Votos válidos', t.valid], ['Votos em branco', t.blank], ['Votos nulos', t.null],
-    ['Quórum atingido', t.quorum_ok ? 'sim' : 'não'], ['Vencedor', t.winner ? t.winner.name : 'nenhum'], [],
-    ['Número', 'Candidato', 'Partido', 'Votos', '% dos válidos'], ...t.candidates.map(x => [x.number, x.name, x.party, x.votes, x.pct])];
+  const L = [
+    ['Apuração da eleição'],
+    ['Eleitores habilitados', t.eligible],
+    ['Eleitores que concluíram todos os cargos', t.completed],
+    ['Votos contabilizados nos resultados', t.total],
+    ['Quórum geral atingido', t.quorum_ok ? 'sim' : 'não'],
+    [],
+    ['Cargo', 'Turno', 'Número', 'Candidato', 'Partido', 'Votos', '% dos válidos', 'Vencedor']
+  ];
+  (t.offices || []).forEach(o => {
+    o.candidates.forEach(x => L.push([
+      o.name, o.round, x.number, x.name, x.party, x.votes, x.pct,
+      o.winner && o.winner.candidate_id === x.candidate_id ? 'sim' : 'não'
+    ]));
+    if (!o.candidates.length) L.push([o.name, o.round, '', 'Sem candidatos ativos', '', 0, 0, 'não']);
+  });
   const txt = '\uFEFF' + L.map(r => r.map(cel).join(';')).join('\r\n');
-  const a = h('a', { href: URL.createObjectURL(new Blob([txt], { type: 'text/csv;charset=utf-8' })), download: 'apuracao-turno-' + t.round + '.csv' });
+  const a = h('a', { href: URL.createObjectURL(new Blob([txt], { type: 'text/csv;charset=utf-8' })), download: 'apuracao-eleicao-turno-' + t.round + '.csv' });
   document.body.append(a); a.click(); a.remove();
 }
 async function segundoTurno() {
@@ -468,6 +570,7 @@ function baixarCodigos() {
   document.body.append(a); a.click(); a.remove();
 }
 $('#e-gerar').onclick = gerarCodigos; $('#e-csv').onclick = baixarCodigos;
+$('#office-add').onclick = adicionarCargo;
 $('#e-delete').onclick = apagarEleitor;
 $('#e-delete-voter').addEventListener('focus', carregarEleitoresApagaveis);
 
@@ -478,7 +581,12 @@ async function liberarIp() {
 }
 $('#x-btn').onclick = liberarIp;
 $('#sair').onclick = sair; $('#c-salvar').onclick = salvarConfig; $('#c-save').onclick = salvarCand;
-$('#c-add').onclick = () => { rows.push({ number: '', name: '', party: '', state: '', photo_url: '', active: true, runoff_eligible: false }); desenharCand(); };
+$('#c-add').onclick = () => {
+  const office = offices.find(o => o.active) || offices[0];
+  if (!office) return toast('Adicione pelo menos um cargo antes dos candidatos.');
+  rows.push({ office_id: office.office_id, number: '', name: '', party: '', state: '', photo_url: '', active: true, runoff_eligible: false });
+  desenharCand();
+};
 $('#b-csv').onclick = csv; $('#b-pdf').onclick = () => window.print(); $('#b-2t').onclick = segundoTurno;
 $('#d-vot').addEventListener('toggle', listaEleitores); $('#d-aud').addEventListener('toggle', auditoria);
   $('#c-data-salvar').onclick = salvarDataCabecalho;
