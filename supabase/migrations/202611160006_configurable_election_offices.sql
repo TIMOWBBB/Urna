@@ -11,16 +11,7 @@ CREATE TABLE public.election_offices (
 );
 
 INSERT INTO public.election_offices (name, active, sort_order)
-VALUES
-  ('Presidente da Câmara dos Deputados', true, 0),
-  ('Presidente da República', false, 10),
-  ('Governador', false, 20),
-  ('Senador', false, 30),
-  ('Deputado Federal', false, 40),
-  ('Deputado Estadual', false, 50),
-  ('Deputado Distrital', false, 60),
-  ('Prefeito', false, 70),
-  ('Vereador', false, 80)
+VALUES ('Presidente da Câmara dos Deputados', true, 0)
 ON CONFLICT (name) DO NOTHING;
 
 ALTER TABLE public.election_offices ENABLE ROW LEVEL SECURITY;
@@ -105,7 +96,6 @@ ALTER TABLE public.candidates
 
 CREATE INDEX ballots_office_round_idx ON public.ballots (office_id, round);
 CREATE INDEX participation_office_round_idx ON public.participation (office_id, round);
-GRANT SELECT (office_id) ON public.candidates TO anon, authenticated;
 
 -- Public ballot configuration. Only active offices are returned.
 CREATE OR REPLACE FUNCTION public.public_election_offices()
@@ -451,40 +441,6 @@ BEGIN
   );
 END;
 $$;
-
--- Voter list now reports completion across all active offices and their current rounds.
-CREATE OR REPLACE FUNCTION public.admin_voter_list()
-RETURNS TABLE(display_name text, voted boolean)
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $
-BEGIN
-  IF NOT public.is_admin() THEN
-    RAISE EXCEPTION 'sem_permissao';
-  END IF;
-
-  RETURN QUERY
-  SELECT
-    v.display_name,
-    EXISTS (SELECT 1 FROM public.election_offices WHERE active)
-    AND NOT EXISTS (
-      SELECT 1
-      FROM public.election_offices AS o
-      WHERE o.active
-        AND NOT EXISTS (
-          SELECT 1
-          FROM public.participation AS p
-          WHERE p.voter_id = v.id
-            AND p.office_id = o.id
-            AND p.round = o.round
-        )
-    ) AS voted
-  FROM public.voters AS v
-  WHERE v.eligible
-  ORDER BY v.display_name;
-END;
-$;
 
 CREATE OR REPLACE FUNCTION public.admin_turnout()
 RETURNS jsonb
@@ -886,7 +842,6 @@ REVOKE ALL ON FUNCTION public.admin_turnout() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.admin_turnout() TO authenticated;
 REVOKE ALL ON FUNCTION public.admin_tally() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.admin_tally() TO authenticated;
-REVOKE ALL ON FUNCTION public.public_election_offices() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.public_election_offices() TO anon, authenticated;
 
 NOTIFY pgrst, 'reload schema';
