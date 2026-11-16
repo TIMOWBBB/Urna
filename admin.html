@@ -79,16 +79,18 @@ td,th{padding:5px;border-bottom:1px solid #e1e3e8;text-align:left}
         <option value="absolute_valid">Absoluta dos votos válidos</option>
         <option value="plurality">Simples (mais votado)</option></select></label>
       <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="c-2t"> Haver 2º turno</label>
+      <label>Votos por IP (0 = sem limite)<input type="number" id="c-ip" min="0" style="width:90px"></label>
       <button id="c-salvar">Salvar</button>
     </div>
-    <p style="font-size:13px;color:#555">Só pode ser alterada com a votação em preparação ou suspensa.</p>
+    <p style="font-size:13px;color:#555">Só pode ser alterada com a votação em preparação ou suspensa. O limite por IP vale por rede: pessoas na mesma casa ou na mesma operadora móvel podem ser bloqueadas por engano.</p>
+    <div class="row"><label>Liberar eleitor bloqueado por IP (ID do Discord)<input id="x-id"></label><button class="cinza" id="x-btn">Liberar</button></div>
   </section>
 
   <section class="card">
     <h2>Candidaturas</h2>
     <div class="scroll"><table id="t-cand"></table></div>
     <div class="row" style="margin-top:8px"><button class="cinza" id="c-add">+ Candidato</button><button id="c-save">Salvar candidaturas</button></div>
-    <p style="font-size:13px;color:#555">Edição só com a votação em preparação. Para remover, desmarque “Ativo”. “2º turno” marca quem disputa o segundo turno.</p>
+    <p style="font-size:13px;color:#555">Adicione, edite ou exclua candidatos com a votação em preparação. Candidatos que já receberam votos não podem ser apagados; desative-os para preservar o histórico. “2º turno” marca quem disputa o segundo turno.</p>
   </section>
 
   <section class="card" id="apuracao" hidden>
@@ -101,6 +103,14 @@ td,th{padding:5px;border-bottom:1px solid #e1e3e8;text-align:left}
   </section>
 
   <section class="card">
+    <h2>Cadastrar eleitores em lote</h2>
+    <p style="font-size:13px;color:#555">Um por linha: <b>Nome;ID do Discord</b>. Só com a votação em preparação ou suspensa. Os códigos aparecem <b>uma única vez</b>: copie ou baixe antes de sair da página.</p>
+    <textarea id="e-txt" rows="5" style="width:100%;font:inherit" placeholder="Maria Souza;123456789012345678"></textarea>
+    <div class="row" style="margin-top:8px"><button id="e-gerar">Gerar códigos</button><button class="cinza" id="e-csv" hidden>Baixar CSV dos códigos</button></div>
+    <div class="scroll"><table id="t-cod"></table></div>
+  </section>
+
+  <section class="card">
     <details id="d-aud"><summary><b>Auditoria</b> (últimas 30 ações)</summary><div class="scroll"><table id="t-aud"></table></div></details>
   </section>
 </main>
@@ -109,8 +119,8 @@ td,th{padding:5px;border-bottom:1px solid #e1e3e8;text-align:left}
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 // ===== CONFIGURE AQUI (mesma URL e chave anon da urna.html) =====
-const SUPABASE_URL = 'https://znkatufvohzrpiplamwp.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpua2F0dWZ2b2h6cnBpcGxhbXdwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ3MTM0MTgsImV4cCI6MjExMDI4OTQxOH0.X8HK_J_HJOgMSBhk5hOGyd7Vnnys2csX6hMS-6xfNmM';
+const SUPABASE_URL = 'https://SEU-PROJETO.supabase.co';
+const SUPABASE_ANON_KEY = 'SUA-CHAVE-ANON';
 // ================================================================
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { storageKey: 'urna-admin-auth' } });
@@ -123,7 +133,11 @@ const ERR = {
   transicao_invalida: 'Esta mudança de estado não é permitida.',
   config_bloqueada: 'Configuração bloqueada: suspenda a votação antes de alterar.',
   apuracao_so_apos_encerramento: 'A apuração só é possível depois do encerramento.',
-  segundo_turno_nao_aplicavel: 'Segundo turno não se aplica.'
+  segundo_turno_nao_aplicavel: 'Segundo turno não se aplica.',
+  cadastro_bloqueado: 'Cadastro de eleitores só com a votação em preparação ou suspensa.',
+  nome_obrigatorio: 'Há eleitor sem nome.',
+  valor_invalido: 'Valor inválido.',
+  eleitor_nao_encontrado: 'Nenhum eleitor com esse ID do Discord.'
 };
 let cfg = null, tally = null, lastStatus = null, timer = null;
 
@@ -171,7 +185,7 @@ function desenharAcoes() {
   if (s === 'open') a.append(botao('Suspender', 'cinza', () => mudar('paused')));
   if (s === 'open' || s === 'paused') a.append(botao('Encerrar definitivamente', 'verm', () => {
     if (confirm('Encerrar a votação? Esta ação é irreversível para administradores comuns.')) mudar('closed'); }));
-  if (s === 'closed') a.append(botao('Reabrir votação)', 'cinza', () => {
+  if (s === 'closed') a.append(botao('Reabrir (administrador principal)', 'cinza', () => {
     if (prompt('Para reabrir, digite REABRIR. A ação será registrada na auditoria.') === 'REABRIR') mudar('open', 'REABRIR'); }));
 }
 async function mudar(st, conf) { try { await call('admin_set_status', { p_status: st, p_confirm: conf || null }); toast('Estado atualizado.'); await refresh(); } catch (e) {} }
@@ -181,12 +195,13 @@ const loc = iso => { if (!iso) return ''; const d = new Date(iso); return new Da
 const iso = v => v ? new Date(v).toISOString() : null;
 function preencherConfig() {
   $('#c-ini').value = loc(cfg.starts_at); $('#c-fim').value = loc(cfg.ends_at); $('#c-q').value = cfg.quorum_pct;
-  $('#c-r').value = cfg.majority_rule; $('#c-2t').checked = cfg.runoff_enabled;
+  $('#c-r').value = cfg.majority_rule; $('#c-2t').checked = cfg.runoff_enabled; $('#c-ip').value = cfg.max_votes_per_ip;
 }
 async function salvarConfig() {
   try {
     await call('admin_set_config', { p_starts: iso($('#c-ini').value), p_ends: iso($('#c-fim').value),
       p_quorum: Number($('#c-q').value || 0), p_rule: $('#c-r').value, p_runoff: $('#c-2t').checked });
+    await call('admin_set_ip_limit', { p_max: Number($('#c-ip').value || 0) });
     toast('Configuração salva.'); lastStatus = null; await refresh();
   } catch (e) {}
 }
@@ -199,26 +214,47 @@ async function carregarCand() {
   rows = data; desenharCand();
 }
 function desenharCand() {
-  const t = $('#t-cand'), bloq = !['draft', 'paused'].includes(cfg.status); t.replaceChildren();
-  t.append(h('tr', {}, ...['Número', 'Nome', 'Partido', 'Estado', 'URL da foto', 'Ativo', '2º turno'].map(x => h('th', {}, x))));
+  const t = $('#t-cand'), bloq = cfg.status !== 'draft'; t.replaceChildren();
+  t.append(h('tr', {}, ...['Número', 'Nome', 'Partido', 'Estado', 'URL da foto', 'Ativo', '2º turno', 'Ações'].map(x => h('th', {}, x))));
   rows.forEach((r, i) => {
     const campo = (k, w) => { const el = h('input', { style: 'width:' + w }); el.value = r[k] || ''; el.disabled = bloq; el.oninput = () => r[k] = el.value; return h('td', {}, el); };
     const chk = k => { const el = h('input', { type: 'checkbox' }); el.checked = !!r[k]; el.disabled = bloq; el.onchange = () => r[k] = el.checked; return h('td', {}, el); };
-    t.append(h('tr', {}, campo('number', '60px'), campo('name', '160px'), campo('party', '110px'), campo('state', '120px'), campo('photo_url', '170px'), chk('active'), chk('runoff_eligible')));
+    const excluir = botao('Excluir', 'verm', () => excluirCand(i));
+    excluir.disabled = bloq;
+    t.append(h('tr', {}, campo('number', '60px'), campo('name', '160px'), campo('party', '110px'), campo('state', '120px'), campo('photo_url', '170px'), chk('active'), chk('runoff_eligible'), h('td', {}, excluir)));
   });
 }
 async function salvarCand() {
-  if (!['draft', 'paused'].includes(cfg.status)) return toast('Candidaturas só podem ser editadas com a votação em preparação ou suspensa.');
+  if (cfg.status !== 'draft') return toast('Candidaturas só podem ser editadas com a votação em preparação.');
+  if (!rows.length) return toast('Adicione pelo menos um candidato.');
   for (const r of rows) {
-    const d = { number: String(r.number || '').trim(), name: (r.name || '').trim(), party: (r.party || '').trim(), state: (r.state || '').trim(),
-      photo_url: (r.photo_url || '').trim() || null, active: r.active !== false, runoff_eligible: !!r.runoff_eligible };
-    if (!d.number || !d.name || !d.party || !d.state) return toast('Preencha número, nome, partido e estado.');
-    const q = r.id ? sb.from('candidates').update(d).eq('id', r.id).select() : sb.from('candidates').insert(d).select();
-    const { data, error } = await q;
-    if (error) return toast(error.code === '23505' ? 'Número já usado por outra candidatura.' : 'Erro ao salvar: ' + error.message);
-    if (!data.length) return toast('Alteração bloqueada pelo servidor.');
+    const d = { p_id: r.id || null, p_number: String(r.number || '').trim(), p_name: (r.name || '').trim(),
+      p_party: (r.party || '').trim(), p_state: (r.state || '').trim(),
+      p_photo_url: (r.photo_url || '').trim() || null, p_active: r.active !== false,
+      p_runoff_eligible: !!r.runoff_eligible };
+    if (!d.p_number || !d.p_name || !d.p_party || !d.p_state) return toast('Preencha número, nome, partido e estado.');
+    try {
+      const id = await call('admin_save_candidate', d);
+      r.id = id;
+    } catch (e) {
+      if (e.code === '23505') toast('Número já usado por outra candidatura.');
+      return;
+    }
   }
-  toast('Candidaturas salvas.'); await carregarCand();
+  toast('Candidaturas salvas e registradas na auditoria.'); await carregarCand();
+}
+async function excluirCand(i) {
+  if (cfg.status !== 'draft') return toast('Candidaturas só podem ser removidas com a votação em preparação.');
+  const r = rows[i];
+  if (!confirm('Excluir ' + (r.name || 'este candidato') + ' do banco de dados? Se já recebeu votos, o sistema impedirá a exclusão para preservar a apuração.')) return;
+  if (!r.id) {
+    rows.splice(i, 1); desenharCand(); return toast('Candidato removido da lista. Salve para concluir as demais alterações.');
+  }
+  try {
+    await call('admin_delete_candidate', { p_id: r.id });
+    rows.splice(i, 1); desenharCand();
+    toast('Candidato excluído e ação registrada na auditoria.');
+  } catch (e) {}
 }
 
 // ---------- eleitores e auditoria ----------
@@ -266,7 +302,35 @@ async function segundoTurno() {
   try { await call('admin_start_runoff'); toast('2º turno preparado (em preparação).'); lastStatus = null; await refresh(); } catch (e) {}
 }
 
+// ---------- cadastro de eleitores em lote ----------
+let codigos = [];
+async function gerarCodigos() {
+  const linhas = $('#e-txt').value.split('\n').map(l => l.trim()).filter(Boolean);
+  if (!linhas.length) return;
+  const rows = linhas.map(l => { const [n, d] = l.split(';'); return { name: (n || '').trim(), discord_id: (d || '').trim() }; });
+  if (rows.some(r => !r.name)) return toast('Há linha sem nome.');
+  if (!confirm('Cadastrar ' + rows.length + ' eleitor(es)?')) return;
+  try {
+    codigos = await call('admin_add_voters', { p_rows: rows });
+    $('#e-txt').value = '';
+    const t = $('#t-cod'); t.replaceChildren(h('tr', {}, ...['Nome', 'Discord', 'Código'].map(x => h('th', {}, x))));
+    codigos.forEach(v => t.append(h('tr', {}, h('td', {}, v.nome), h('td', {}, v.discord || ''), h('td', {}, v.codigo))));
+    $('#e-csv').hidden = false; toast('Eleitores cadastrados. Guarde os códigos agora.'); refresh();
+  } catch (e) {}
+}
+function baixarCodigos() {
+  const txt = '\uFEFF' + [['Nome', 'Discord', 'Código'], ...codigos.map(v => [v.nome, v.discord || '', v.codigo])].map(r => r.map(cel).join(';')).join('\r\n');
+  const a = h('a', { href: URL.createObjectURL(new Blob([txt], { type: 'text/csv;charset=utf-8' })), download: 'codigos-eleitores.csv' });
+  document.body.append(a); a.click(); a.remove();
+}
+$('#e-gerar').onclick = gerarCodigos; $('#e-csv').onclick = baixarCodigos;
+
 $('#entrar').onclick = entrar; $('#senha').addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); });
+async function liberarIp() {
+  const id = $('#x-id').value.trim(); if (!id) return;
+  try { await call('admin_ip_exempt', { p_discord: id }); toast('Eleitor liberado do limite por IP.'); $('#x-id').value = ''; } catch (e) {}
+}
+$('#x-btn').onclick = liberarIp;
 $('#sair').onclick = sair; $('#c-salvar').onclick = salvarConfig; $('#c-save').onclick = salvarCand;
 $('#c-add').onclick = () => { rows.push({ number: '', name: '', party: '', state: '', photo_url: '', active: true, runoff_eligible: false }); desenharCand(); };
 $('#b-csv').onclick = csv; $('#b-pdf').onclick = () => window.print(); $('#b-2t').onclick = segundoTurno;
