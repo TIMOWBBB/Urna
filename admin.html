@@ -171,7 +171,7 @@ function desenharAcoes() {
   if (s === 'open') a.append(botao('Suspender', 'cinza', () => mudar('paused')));
   if (s === 'open' || s === 'paused') a.append(botao('Encerrar definitivamente', 'verm', () => {
     if (confirm('Encerrar a votação? Esta ação é irreversível para administradores comuns.')) mudar('closed'); }));
-  if (s === 'closed') a.append(botao('Reabrir (administrador principal)', 'cinza', () => {
+  if (s === 'closed') a.append(botao('Reabrir votação)', 'cinza', () => {
     if (prompt('Para reabrir, digite REABRIR. A ação será registrada na auditoria.') === 'REABRIR') mudar('open', 'REABRIR'); }));
 }
 async function mudar(st, conf) { try { await call('admin_set_status', { p_status: st, p_confirm: conf || null }); toast('Estado atualizado.'); await refresh(); } catch (e) {} }
