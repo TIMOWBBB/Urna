@@ -207,6 +207,42 @@ let cands = [], digits = '', choice = null, len = 2, busy = false;
 let statusAtual = null;
 let telaAtual = 'carregando';
 let verificandoStatus = false;
+let audioCtx = null;
+
+function somUrna(tipo) {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) return;
+  try {
+    if (!audioCtx) audioCtx = new AudioContextCtor();
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    const sequencias = {
+      tecla: [[660, 0]],
+      branco: [[520, 0]],
+      nulo: [[390, 0]],
+      corrige: [[460, 0]],
+      confirma: [[760, 0]],
+      erro: [[240, 0]],
+      sucesso: [[523, 0], [659, 0.09], [784, 0.18]]
+    };
+    const agora = audioCtx.currentTime;
+    (sequencias[tipo] || sequencias.tecla).forEach(([frequencia, atraso]) => {
+      const oscilador = audioCtx.createOscillator();
+      const volume = audioCtx.createGain();
+      const inicio = agora + atraso;
+      oscilador.type = 'sine';
+      oscilador.frequency.setValueAtTime(frequencia, inicio);
+      volume.gain.setValueAtTime(0.0001, inicio);
+      volume.gain.exponentialRampToValueAtTime(0.12, inicio + 0.008);
+      volume.gain.exponentialRampToValueAtTime(0.0001, inicio + 0.075);
+      oscilador.connect(volume);
+      volume.connect(audioCtx.destination);
+      oscilador.start(inicio);
+      oscilador.stop(inicio + 0.08);
+    });
+  } catch (e) {
+    // O voto continua funcionando mesmo se o navegador bloquear áudio.
+  }
+}
 
 function stage(id) {
   telaAtual = id;
@@ -354,21 +390,23 @@ async function confirmar() {
   const { error } = await sb.rpc('cast_vote', { p_kind: choice || 'candidate', p_number: choice ? null : digits });
   busy = false;
   if (error) {
+    somUrna('erro');
     if (error.message === 'ja_votou') return fim('VOCÊ JÁ VOTOU', 'Não é possível votar novamente.');
     if (error.message === 'votacao_fechada') return geral(ERR.votacao_fechada);
     $('#aviso').textContent = msg(error); render(); return;
   }
+  somUrna('sucesso');
   fim('FIM — SEU VOTO FOI COMPUTADO');
 }
 
 document.addEventListener('click', e => {
   const k = e.target.closest('[data-k]'); if (!k || busy) return;
   const v = k.dataset.k;
-  if (/^\d$/.test(v)) { if (!choice && digits.length < len) digits += v; $('#aviso').textContent = ''; }
-  else if (v === 'B') { choice = 'blank'; digits = ''; }
-  else if (v === 'N') { choice = 'null'; digits = ''; }
-  else if (v === 'C') return limpar();
-  else if (v === 'OK') return confirmar();
+  if (/^\d$/.test(v)) { somUrna('tecla'); if (!choice && digits.length < len) digits += v; $('#aviso').textContent = ''; }
+  else if (v === 'B') { somUrna('branco'); choice = 'blank'; digits = ''; }
+  else if (v === 'N') { somUrna('nulo'); choice = 'null'; digits = ''; }
+  else if (v === 'C') { somUrna('corrige'); return limpar(); }
+  else if (v === 'OK') { somUrna('confirma'); return confirmar(); }
   render();
 });
 $('#btn-iniciar').onclick = entrar;
