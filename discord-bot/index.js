@@ -95,7 +95,8 @@ async function fetchRows(table, params) {
 }
 
 async function countRows(table, filters) {
-  const url = makeUrl(table, { select: 'id', ...filters });
+  const countColumn = table === 'participation' ? 'voter_id' : 'id';
+  const url = makeUrl(table, { select: countColumn, ...filters });
   const response = await restRequest(url, {
     method: 'HEAD',
     headers: {
