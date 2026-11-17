@@ -1,6 +1,7 @@
 import {
   AttachmentBuilder,
   Client,
+  MessageFlags,
   GatewayIntentBits,
   REST,
   Routes,
@@ -96,6 +97,7 @@ async function fetchRows(table, params) {
 async function countRows(table, filters) {
   const url = makeUrl(table, { select: 'id', ...filters });
   const response = await restRequest(url, {
+    method: 'HEAD',
     headers: {
       Range: '0-0',
       'Range-Unit': 'items',
@@ -151,16 +153,6 @@ async function loadFinalResults() {
       })
     })))
   ]);
-
-  // Confirma que a eleição continua encerrada até o momento da publicação.
-  const finalCheck = await fetchRows('election_config', {
-    select: 'status',
-    id: 'eq.1',
-    limit: '1'
-  });
-  if (finalCheck[0]?.status !== 'closed') {
-    throw new Error('A eleição foi reaberta durante a consulta. Nenhum resultado foi publicado.');
-  }
 
   const participationByOffice = new Map(
     participations.map(item => [`${item.officeId}:${item.round}`, item.count])
@@ -226,6 +218,16 @@ async function loadFinalResults() {
     };
   });
 
+  // Revalida após as contagens para não publicar se um administrador reabrir a eleição durante a consulta.
+  const finalCheck = await fetchRows('election_config', {
+    select: 'status',
+    id: 'eq.1',
+    limit: '1'
+  });
+  if (finalCheck[0]?.status !== 'closed') {
+    throw new Error('A eleição foi reaberta durante a consulta. Nenhum resultado foi publicado.');
+  }
+
   return { config, eligibleVoters, reports };
 }
 
@@ -244,7 +246,7 @@ function fitText(context, text, maxWidth) {
   return `${value}…`;
 }
 
-function renderOfficePage(report, config, pageIndex, pageCount) {
+function renderOfficePage(report, config, eligibleVoters, pageIndex, pageCount) {
   const width = 1200;
   const start = pageIndex * CANDIDATES_PER_IMAGE;
   const pageCandidates = report.candidates.slice(start, start + CANDIDATES_PER_IMAGE);
@@ -273,7 +275,7 @@ function renderOfficePage(report, config, pageIndex, pageCount) {
   context.fillText(`${report.round}º turno`, 76, 258);
   context.font = '20px Arial';
   context.fillText(`Votos: ${report.total}   Válidos: ${report.valid}   Brancos: ${report.blank}   Nulos: ${report.nullVotes}`, 76, 300);
-  context.fillText(`Participação: ${report.participants} de ${eligibleCountLabel(report)}`, 76, 336);
+  context.fillText(`Participação: ${report.participants} de ${eligibleVoters}`, 76, 336);
 
   context.fillStyle = report.winner ? '#e7f5eb' : '#fff4d6';
   context.fillRect(50, 382, 1100, 66);
@@ -291,7 +293,7 @@ function renderOfficePage(report, config, pageIndex, pageCount) {
     context.font = '22px Arial';
     context.fillText('Nenhuma candidatura ativa para este cargo.', 60, y + 36);
   }
-  for (const [index, candidate] of pageCandidates.entries()) {
+  for (const candidate of pageCandidates) {
     context.fillStyle = '#ffffff';
     context.fillRect(50, y, 1100, 64);
     context.fillStyle = '#173b73';
@@ -329,11 +331,6 @@ function renderOfficePage(report, config, pageIndex, pageCount) {
   return canvas.toBuffer('image/png');
 }
 
-function eligibleCountLabel(report) {
-  return report.eligibleVoters ?? globalEligibleVoters;
-}
-let globalEligibleVoters = 0;
-
 function makeFileName(name, pageIndex) {
   const slug = name.normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -344,20 +341,19 @@ function makeFileName(name, pageIndex) {
 }
 
 function renderReports(reports, config, eligibleVoters) {
-  globalEligibleVoters = eligibleVoters;
   return reports.flatMap(report => {
     const pageCount = Math.max(1, Math.ceil(report.candidates.length / CANDIDATES_PER_IMAGE));
     return Array.from({ length: pageCount }, (_, pageIndex) => ({
       officeName: report.name,
       pageIndex,
-      buffer: renderOfficePage(report, config, pageIndex, pageCount),
+      buffer: renderOfficePage(report, config, eligibleVoters, pageIndex, pageCount),
       filename: makeFileName(report.name, pageIndex)
     }));
   });
 }
 
 async function publish(interaction) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   if (interaction.guildId !== guildId) {
     return interaction.editReply('Este comando só está disponível no servidor configurado.');
@@ -409,7 +405,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(message).catch(() => {});
     } else {
-      await interaction.reply({ content: message, ephemeral: true }).catch(() => {});
+      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
   }
 });
